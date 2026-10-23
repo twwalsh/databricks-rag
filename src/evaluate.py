@@ -10,16 +10,22 @@ score and a Cloudflare score mean the same thing. Each case is pass/fail on all 
 how support-eval.mjs reports it; `strict_pass` is that number.
 """
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling imports when run as a job task
 
+# The harness fans predict_fn out over many threads by default. With the Databricks SDK that
+# deadlocked on 2026-10-23: 243 threads, every socket in CLOSE_WAIT, 0% CPU. Two workers is plenty
+# for 30 questions and keeps the pay-per-token endpoints out of their rate limit too.
+os.environ.setdefault("MLFLOW_GENAI_EVAL_MAX_WORKERS", "2")
+
 import mlflow
 from mlflow.genai import evaluate, scorer
 
-from ask import ask
+from ask import ask, client
 from config import EXPERIMENT, PROFILE
 
 CASES = Path(__file__).resolve().parent.parent / "data" / "eval.jsonl"
@@ -31,7 +37,10 @@ def load_cases():
         if not line.strip():
             continue
         c = json.loads(line)
-        rows.append({"inputs": {"question": c["q"]}, "expectations": {"must": c.get("must", []), "must_not": c.get("mustNot", []), "form": c.get("form")}})
+        exp = {"must": c.get("must", []), "must_not": c.get("mustNot", [])}
+        if c.get("form"):
+            exp["form"] = c["form"]  # MLflow rejects an expectation whose value is None, so absent means "no form required"
+        rows.append({"inputs": {"question": c["q"]}, "expectations": exp})
     return rows
 
 
@@ -69,6 +78,7 @@ def main() -> int:
         mlflow.set_tracking_uri(f"databricks://{PROFILE}")
         mlflow.set_experiment(EXPERIMENT)
     rows = load_cases()
+    client()  # build the SDK client once, on the main thread, before the workers start
     result = evaluate(data=rows, predict_fn=predict_fn, scorers=[must_match, must_not_match, form_offered, strict_pass])
     m = result.metrics
     print(json.dumps(m, indent=2))

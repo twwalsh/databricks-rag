@@ -52,11 +52,63 @@ databricks bundle deploy -t dev && databricks bundle run rag_index -t dev   # th
 
 ## Results
 
-_Filled in from the first evaluation run; see below._
+First full run, 2026-10-23, Llama 3.3 70B as the generator (MLflow run `4e1fd250…` in the workspace
+experiment `fr-support-rag`, every answer with its retrieved passages):
+
+| Scorer | Databricks build | Cloudflare build (first run) |
+|---|---|---|
+| must-say rules met | 29/30 | 29/30 |
+| must-not-say rules met | 30/30 | 30/30 |
+| right self-service form offered | 30/30 | 30/30 |
+| **strict pass (all rules of a case)** | **29/30** | **29/30** |
+
+The Databricks miss: *"Does the bundle include plugins you release later?"* The answer was correct and
+cited the right FAQ entry ("The bundle is the catalog on the day you buy it, and a plugin released later is
+a separate purchase") but never said **no** to a yes/no question, which the case requires. The
+Cloudflare miss on its first run was the test's own regex, fixed in the test. So: the same score, for a
+different reason, and the Databricks one is the model's.
+
+Hand checks: the off-topic question ("What is the capital of France?") is refused; licensing questions
+pull the FAQ first; the Trammel SLOW-attack question lands on the exact manual section.
 
 ## What the comparison taught
 
-_Filled in after the first evaluation run._
+- **Grounding is the prompt's job only when there is something to ground on.** Against the still-empty
+  index, the hosted model answered a licensing question from general knowledge, invented a "LICENSE FILE
+  control in the plugin's header", and offered a form, with the prompt's prohibition in front of it. Both
+  builds now refuse to call the model when retrieval returns nothing. Neither had that guard before.
+- **Managed embeddings remove a whole class of bugs.** The Cloudflare build embeds at index time and
+  query time with the same model by discipline (a comment in two files). The Delta Sync index embeds
+  both sides itself, so the mismatch cannot happen; and gte-large's 8k window means no chunk is
+  truncated, where bge-base's 512 tokens forced a character cap in the chunker.
+- **Hybrid search costs nothing to turn on here** and helps exactly where a support corpus needs it:
+  control names in capitals, plugin names, `.frlicense`.
+- **The hosted open model is a little too eager with the form.** Llama offered a self-service form on
+  questions where none applied (a "complete-bundle" form on a question about an attack time). Claude
+  did not. The eval does not penalise a spurious form, which is a gap in the eval, not a pass.
+- **Free Edition is a real workspace with a few sharp edges.** One Vector Search endpoint; a new index
+  can sit at "pending endpoint provisioning" for 40 minutes and forcing its pipeline early breaks it;
+  `mlflow.genai.evaluate` deadlocks against the SDK at its default worker count. All recorded in the
+  code comments where they bit.
+- **What the Databricks side gives that the Worker does not:** the table, the index, the job run, every
+  evaluated answer and the registered model versions are all inspectable in one place, with lineage.
+  The Cloudflare build's equivalents are a manifest file, AI Gateway logs and a terminal.
+
+## Model lifecycle
+
+`src/release.py` is the half of the POC the Cloudflare build has no equivalent for:
+
+1. **Version:** every run logs the assistant *from code* (`src/agent.py`, an MLflow `ResponsesAgent`
+   around `ask.py`) and registers it as a new version of `workspace.rag.support_assistant` in Unity
+   Catalog, with the index and the chat endpoint declared as resources so a serving container gets
+   pass-through auth to them.
+2. **Evaluate:** the same 30 cases run against the version, linked to it in MLflow, so each version
+   carries its own scores.
+3. **Promote:** the `champion` alias moves only if strict pass ≥ 80%; otherwise the version stays
+   registered, unaliased, with its failing scores attached. The previous champion keeps the alias
+   `previous`, so a rollback is one alias call.
+4. **Serve:** `--deploy` puts `models:/workspace.rag.support_assistant@champion` behind a Model Serving
+   endpoint (`fr-support-assistant`).
 
 ## Not built
 

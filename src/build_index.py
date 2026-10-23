@@ -38,7 +38,8 @@ def main() -> int:
     print(f"endpoint {ENDPOINT} online")
 
     existing = {i.name for i in w.vector_search_indexes.list_indexes(endpoint_name=ENDPOINT)}
-    if INDEX not in existing:
+    created_now = INDEX not in existing
+    if created_now:
         print(f"creating index {INDEX} from {SOURCE_TABLE}")
         w.vector_search_indexes.create_index(
             name=INDEX,
@@ -53,22 +54,19 @@ def main() -> int:
                 columns_to_sync=["id", "source", "title", "url", "text"],
             ),
         )
-    else:
-        print(f"index {INDEX} exists")
-
-    # A TRIGGERED index is a pipeline that nothing starts for you. sync_index() refuses until the index
-    # is "ready", and the index is not ready until the pipeline has run once: on 2026-10-23 a new index
-    # sat at "pending endpoint provisioning" for 40 minutes that way. Starting the pipeline's update
-    # directly is what breaks the loop, and it is also the right re-sync for an existing index.
+    # A TRIGGERED index re-syncs only when asked. For an EXISTING, ready index, start its pipeline
+    # (sync_index() does the same through the Vector Search API). For a NEW index, do nothing: the
+    # service runs the first update itself once the backend exists. On 2026-10-23 a manual start on a
+    # new index, forced after 40 minutes of "pending endpoint provisioning", ran before the data plane
+    # had the index and failed 404 on every automatic retry after; the index had to be recreated.
     idx = w.vector_search_indexes.get_index(index_name=INDEX)
-    pipeline_id = idx.delta_sync_index_spec.pipeline_id if idx.delta_sync_index_spec else None
-    if pipeline_id:
-        pl = w.pipelines.get(pipeline_id)
-        if pl.state and pl.state.value in ("IDLE", "FAILED"):
-            upd = w.pipelines.start_update(pipeline_id)
-            print(f"started pipeline {pipeline_id} update {upd.update_id}")
-        else:
-            print(f"pipeline {pipeline_id} is {pl.state.value if pl.state else '?'}; not starting another update")
+    if created_now:
+        print("new index: waiting for the service's own first sync")
+    elif idx.status and idx.status.ready and idx.delta_sync_index_spec and idx.delta_sync_index_spec.pipeline_id:
+        upd = w.pipelines.start_update(idx.delta_sync_index_spec.pipeline_id)
+        print(f"re-sync: started pipeline update {upd.update_id}")
+    else:
+        print(f"index exists but is not ready yet: {idx.status.message if idx.status else '?'}")
 
     # Wait for the sync. The first one also provisions the pipeline, so allow a while. The status
     # object has only ready / message / indexed_row_count (SDK 0.40+); the message carries the state.
