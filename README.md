@@ -22,7 +22,7 @@ assistant; that stays on Cloudflare, where the site runs.
 | Generation | Claude Haiku 5.5 via AI Gateway, streamed; `show_form` is a tool call | a Databricks-hosted model via Model Serving (Llama 3.3 70B by default, `RAG_CHAT_MODEL` to change); `show_form` is a tagged last line, so any hosted model can use it |
 | Evaluation | `support-eval.mjs` against a local `wrangler dev`: regex rules per case | `src/evaluate.py`: the same rules as MLflow scorers, logged to an MLflow experiment with every answer and its retrieved passages |
 | Deployment | `wrangler deploy` of the site Worker | a Declarative Automation Bundle (`databricks.yml`): one serverless job, SQL task + Python task |
-| Public front door | the site widget: Turnstile, sessions, rate limits, streaming | none yet (see below) |
+| Public front door | the site widget: Turnstile, sessions, rate limits, streaming | [twwalsh.com/ask-databricks](https://twwalsh.com/ask-databricks/): a Cloudflare Worker route that carries the question to the index and the gateway and the answer back (Turnstile, size caps, fail-closed) |
 
 ## Layout
 
@@ -30,10 +30,14 @@ assistant; that stays on Cloudflare, where the site runs.
 data/chunks.jsonl        the corpus, exported from the site's chunker (make export)
 data/eval.jsonl          the 30 evaluation cases, copied verbatim
 sql/chunks.sql           the source Delta table, from the volume
-src/config.py            names: catalog, schema, endpoint, index, models
+gateway/support_llm.json the Unity Gateway model service: routing, fallback, rate limits, inference table
+src/config.py            names: catalog, schema, endpoint, index, gateway service, model, serving endpoint
 src/build_index.py       endpoint + Delta Sync index, sync, wait
-src/ask.py               retrieve (hybrid + licensing pin) then answer from the passages only
-src/evaluate.py          the eval set as MLflow GenAI scorers
+src/ask.py               retrieve (hybrid + licensing pin) then answer from the passages only, via the gateway
+src/graph.py             the same assistant as a LangGraph state graph with show_form as a bound tool
+src/agent.py             the assistant as an MLflow ResponsesAgent, for versioning and serving
+src/release.py           version → eval gate → champion alias → Model Serving
+src/evaluate.py          the eval set as MLflow GenAI scorers (--graph scores the graph path)
 databricks.yml           the bundle; resources/rag.job.yml is the job
 Makefile                 the same steps by hand: export, upload, table, index, ask, eval
 ```
@@ -168,10 +172,9 @@ and not on this one. The point of running both is to know that, with numbers.
 
 ## Not built
 
-- **A public front door.** On Free Edition, a Databricks App is reachable only by workspace users, so a
-  public demo would be a small Cloudflare Worker calling the Vector Search and Model Serving REST APIs
-  with a workspace token. The retrieval and generation would still run here; the page would only be the
-  door.
+- **A Databricks App.** On Free Edition an app is reachable only by workspace users, so the public door is
+  the Cloudflare Worker route above; inside the workspace, the Review App that `agents.deploy` created is
+  the chat UI for the served model.
 - **Claude as the generator.** The Free Edition's pay-per-token endpoints are open-weight models only;
   Claude is registered in `system.ai` but not served here. Pointing the gateway's primary destination at
   it on a paid workspace would make generation identical to the Cloudflare build and isolate the
