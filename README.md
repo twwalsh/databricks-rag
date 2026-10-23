@@ -110,12 +110,35 @@ pull the FAQ first; the Trammel SLOW-attack question lands on the exact manual s
 4. **Serve:** `--deploy` puts `models:/workspace.rag.support_assistant@champion` behind a Model Serving
    endpoint (`fr-support-assistant`).
 
+## The gateway
+
+Generation does not call the model endpoint directly. `gateway/support_llm.json` defines a **Unity Gateway
+model service**, `workspace.rag.support_llm`, and both `ask.py` and the public Worker call it through the
+gateway's chat-completions API. The service owns:
+
+- **Routing and fallback:** Llama 3.3 70B primary, Llama 3.1 8B fallback, tried automatically if the
+  primary fails. Swapping the generator is an edit to the service, not to the code.
+- **Rate limits:** 30 requests / 60k tokens per minute per caller; 600 requests / 1.5M tokens per hour
+  for the service as a whole. A limit of zero would shut the demo off without a deploy.
+- **An inference table:** every request lands in `workspace.rag.support_llm_payload` with the requester,
+  destination model, latency, status and the full request and response, queryable with SQL. Combined
+  with the eval traces in MLflow, every answer the demo has ever given is auditable.
+- **Access as a Unity Catalog securable:** who may call the generator is a grant on the service, not a
+  shared key.
+
+The Cloudflare build uses Cloudflare's AI Gateway for the same reasons (logs, cost view, rate limits), as
+a managed service in front of the Anthropic key. The difference here is that the service, its limits and
+its log table are objects in the same catalog as the data, and the policy is a file in this repo.
+
 ## Not built
 
 - **A public front door.** On Free Edition, a Databricks App is reachable only by workspace users, so a
   public demo would be a small Cloudflare Worker calling the Vector Search and Model Serving REST APIs
   with a workspace token. The retrieval and generation would still run here; the page would only be the
   door.
-- **Claude as the generator.** The Free Edition hosts open-weight models only. Pointing `ask.py` at the
-  Anthropic API would make the generation step identical to the Cloudflare build and isolate the
-  retrieval difference; it is a few lines, not done because the point was to use the hosted stack.
+- **Claude as the generator.** The Free Edition's pay-per-token endpoints are open-weight models only;
+  Claude is registered in `system.ai` but not served here. Pointing the gateway's primary destination at
+  it on a paid workspace would make generation identical to the Cloudflare build and isolate the
+  retrieval difference, with no code change.
+- **A spend budget on gateway usage.** An account-level budget alert exists for Unity Gateway spend; it is
+  an account-admin operation and was not set up on this Free Edition account.
