@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling imports when
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
 
-from config import CHAT_MODEL, INDEX, PROFILE
+from config import CHAT_MODEL, GATEWAY_SERVICE, GENERATOR, INDEX, PROFILE
 
 LIMITS = {"topK": 6, "faqPinned": 3, "passages": 8, "maxTokens": 600}
 FORMS = ("resend-license", "resend-download", "complete-bundle")
@@ -97,6 +97,26 @@ NOTHING = (
 )
 
 
+def generate(system: str, user: str) -> tuple[str, str]:
+    """One chat completion, through the gateway by default. Returns (text, model name)."""
+    if GENERATOR == "gateway":
+        # Unity Gateway's unified chat-completions API: the model is the three-part service name; the
+        # gateway applies the service's routing, fallback, rate limits and inference-table logging.
+        r = client().api_client.do(
+            "POST",
+            "/ai-gateway/mlflow/v1/chat/completions",
+            body={"model": GATEWAY_SERVICE, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}], "max_tokens": LIMITS["maxTokens"], "temperature": 0.0},
+        )
+        return (r["choices"][0]["message"]["content"] or "").strip(), GATEWAY_SERVICE
+    resp = client().serving_endpoints.query(
+        name=CHAT_MODEL,
+        messages=[ChatMessage(role=ChatMessageRole.SYSTEM, content=system), ChatMessage(role=ChatMessageRole.USER, content=user)],
+        max_tokens=LIMITS["maxTokens"],
+        temperature=0.0,
+    )
+    return (resp.choices[0].message.content or "").strip(), CHAT_MODEL
+
+
 def ask(question: str) -> dict:
     passages = retrieve(question)
     # Nothing retrieved → no model call. With an empty passage list the model answers from general
@@ -104,20 +124,14 @@ def ask(question: str) -> dict:
     # a "LICENSE FILE control in the plugin's header" and offered the resend-license form).
     if not passages:
         return {"question": question, "answer": NOTHING, "form": None, "model": None, "passages": []}
-    resp = client().serving_endpoints.query(
-        name=CHAT_MODEL,
-        messages=[ChatMessage(role=ChatMessageRole.SYSTEM, content=SYSTEM), ChatMessage(role=ChatMessageRole.USER, content=_user_message(question, passages))],
-        max_tokens=LIMITS["maxTokens"],
-        temperature=0.0,
-    )
-    text = (resp.choices[0].message.content or "").strip()
+    text, model = generate(SYSTEM, _user_message(question, passages))
     form = None
     m = re.search(r"\n?\s*FORM:\s*([a-z-]+)\s*$", text)
     if m:
         if m.group(1) in FORMS:
             form = m.group(1)
         text = text[: m.start()].rstrip()
-    return {"question": question, "answer": text, "form": form, "model": CHAT_MODEL, "passages": passages}
+    return {"question": question, "answer": text, "form": form, "model": model, "passages": passages}
 
 
 if __name__ == "__main__":

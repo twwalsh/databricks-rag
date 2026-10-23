@@ -20,6 +20,13 @@ INDEX = f"{CATALOG}.{SCHEMA}.chunks_index"
 EMBED_MODEL = "databricks-gte-large-en"
 CHAT_MODEL = os.environ.get("RAG_CHAT_MODEL", "databricks-meta-llama-3-3-70b-instruct")
 
+# Generation goes through a Unity Gateway model service (gateway/support_llm.json): Llama 3.3 70B
+# with 3.1 8B as fallback, per-caller and per-service rate limits, every request logged to
+# workspace.rag.support_llm_payload. RAG_GENERATOR=endpoint calls the bare serving endpoint instead
+# (what the registered model's version 1 was logged with).
+GATEWAY_SERVICE = f"{CATALOG}.{SCHEMA}.support_llm"
+GENERATOR = os.environ.get("RAG_GENERATOR", "gateway")
+
 EXPERIMENT = "/Users/tw@twwalsh.com/fr-support-rag"
 
 # The registered model (Unity Catalog) and its serving endpoint: the lifecycle half of the POC.
