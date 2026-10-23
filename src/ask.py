@@ -91,8 +91,19 @@ def _user_message(question: str, passages: list[dict]) -> str:
     return "PASSAGES:\n\n" + "\n\n".join(parts) + f"\n\nQUESTION: {question}"
 
 
+NOTHING = (
+    "Nothing in the manual, site, changelog or FAQ matched that question, so there is no answer to give. If it is "
+    "about a Fruitless Research product, please write to us through the [contact form](https://fruitlessresearch.com/contact/)."
+)
+
+
 def ask(question: str) -> dict:
     passages = retrieve(question)
+    # Nothing retrieved → no model call. With an empty passage list the model answers from general
+    # knowledge however firmly the prompt forbids it (2026-10-23, against a still-empty index: it invented
+    # a "LICENSE FILE control in the plugin's header" and offered the resend-license form).
+    if not passages:
+        return {"question": question, "answer": NOTHING, "form": None, "model": None, "passages": []}
     resp = client().serving_endpoints.query(
         name=CHAT_MODEL,
         messages=[ChatMessage(role=ChatMessageRole.SYSTEM, content=SYSTEM), ChatMessage(role=ChatMessageRole.USER, content=_user_message(question, passages))],
