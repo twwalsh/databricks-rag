@@ -2,6 +2,7 @@
 
     uv run python src/release.py              # log → register → eval gate → alias "champion" (or not)
     uv run python src/release.py --deploy     # the same, then deploy the champion to Model Serving
+    uv run python src/release.py --deploy-only   # no new version: (re)deploy the current champion
 
 What "lifecycle" means here, concretely:
   version    every run registers a new version of workspace.rag.support_assistant in Unity Catalog,
@@ -32,12 +33,26 @@ from evaluate import form_offered, load_cases, must_match, must_not_match, predi
 SRC = Path(__file__).resolve().parent
 
 
+def deploy_champion(client: MlflowClient) -> int:
+    from databricks import agents
+
+    version = client.get_model_version_by_alias(MODEL_NAME, MODEL_ALIAS).version
+    print(f"deploying {MODEL_NAME}@{MODEL_ALIAS} (version {version}) to serving endpoint {SERVING_ENDPOINT}; this takes a while")
+    # scale_to_zero is REQUIRED on Free Edition ("Scale to zero must be enabled for this workspace"),
+    # and right anyway for a demo endpoint that is idle most of the day.
+    d = agents.deploy(MODEL_NAME, int(version), endpoint_name=SERVING_ENDPOINT, scale_to_zero=True)
+    print(f"deployed: endpoint {d.endpoint_name}, query at {d.query_endpoint}")
+    return 0
+
+
 def main() -> int:
     deploy = "--deploy" in sys.argv
     mlflow.set_tracking_uri(f"databricks://{PROFILE}" if PROFILE else "databricks")
     mlflow.set_registry_uri("databricks-uc")
     mlflow.set_experiment(EXPERIMENT)
     client = MlflowClient()
+    if "--deploy-only" in sys.argv:
+        return deploy_champion(client)
 
     with mlflow.start_run(run_name="release") as run:
         info = mlflow.pyfunc.log_model(
@@ -78,11 +93,7 @@ def main() -> int:
     print(f"promoted: {MODEL_NAME}@{MODEL_ALIAS} -> version {version}")
 
     if deploy:
-        from databricks import agents
-
-        print(f"deploying version {version} to serving endpoint {SERVING_ENDPOINT} (this takes a while)")
-        d = agents.deploy(MODEL_NAME, int(version), endpoint_name=SERVING_ENDPOINT)
-        print(f"deployed: endpoint {d.endpoint_name}, query at {d.query_endpoint}")
+        return deploy_champion(client)
     return 0
 
 
