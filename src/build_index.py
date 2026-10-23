@@ -6,7 +6,7 @@ The source table is built by sql/chunks.sql from chunks.jsonl in the corpus volu
 Delta Sync index with Databricks-managed embeddings (databricks-gte-large-en, 1024-dim, 8k-token
 window), so re-running the SQL and this script is the whole re-index: no embedding code here, which is
 the first difference from the Cloudflare build (scripts/support-index.mjs there embeds each chunk itself
-with Workers AI bge-base and upserts vectors). TRIGGERED sync: we call it, it does not watch the table.
+with Workers AI bge-base and upserts vectors). TRIGGERED sync: this script starts the index's pipeline; nothing watches the table.
 """
 import sys
 from pathlib import Path
@@ -54,12 +54,21 @@ def main() -> int:
             ),
         )
     else:
-        st = w.vector_search_indexes.get_index(index_name=INDEX).status
-        if st and st.ready:
-            print(f"index {INDEX} exists, syncing")
-            w.vector_search_indexes.sync_index(index_name=INDEX)
+        print(f"index {INDEX} exists")
+
+    # A TRIGGERED index is a pipeline that nothing starts for you. sync_index() refuses until the index
+    # is "ready", and the index is not ready until the pipeline has run once: on 2026-10-23 a new index
+    # sat at "pending endpoint provisioning" for 40 minutes that way. Starting the pipeline's update
+    # directly is what breaks the loop, and it is also the right re-sync for an existing index.
+    idx = w.vector_search_indexes.get_index(index_name=INDEX)
+    pipeline_id = idx.delta_sync_index_spec.pipeline_id if idx.delta_sync_index_spec else None
+    if pipeline_id:
+        pl = w.pipelines.get(pipeline_id)
+        if pl.state and pl.state.value in ("IDLE", "FAILED"):
+            upd = w.pipelines.start_update(pipeline_id)
+            print(f"started pipeline {pipeline_id} update {upd.update_id}")
         else:
-            print(f"index {INDEX} exists but is not ready yet: {st.message if st else '?'}")
+            print(f"pipeline {pipeline_id} is {pl.state.value if pl.state else '?'}; not starting another update")
 
     # Wait for the sync. The first one also provisions the pipeline, so allow a while. The status
     # object has only ready / message / indexed_row_count (SDK 0.40+); the message carries the state.
