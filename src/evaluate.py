@@ -2,6 +2,7 @@
 
     uv run python src/evaluate.py                 # all 30 cases, logged to the Databricks experiment
     uv run python src/evaluate.py --local         # same, but MLflow runs stay in ./mlruns
+    uv run python src/evaluate.py --graph         # score the LangGraph path (graph.py) instead of ask.py
 
 The cases are data/eval.jsonl, copied verbatim from the Cloudflare build (site/support/eval.jsonl
 there): a question, `must` regexes the answer has to match, `mustNot` ones it must not, and sometimes
@@ -26,6 +27,7 @@ import mlflow
 from mlflow.genai import evaluate, scorer
 
 from ask import ask, client
+from graph import ask_graph
 from config import EXPERIMENT, PROFILE
 
 CASES = Path(__file__).resolve().parent.parent / "data" / "eval.jsonl"
@@ -45,7 +47,7 @@ def load_cases():
 
 
 def predict_fn(question: str) -> dict:
-    r = ask(question)
+    r = (ask_graph if "--graph" in sys.argv else ask)(question)
     return {"answer": r["answer"], "form": r["form"], "sources": [p["title"] for p in r["passages"]]}
 
 
@@ -79,7 +81,8 @@ def main() -> int:
         mlflow.set_experiment(EXPERIMENT)
     rows = load_cases()
     client()  # build the SDK client once, on the main thread, before the workers start
-    result = evaluate(data=rows, predict_fn=predict_fn, scorers=[must_match, must_not_match, form_offered, strict_pass])
+    with mlflow.start_run(run_name="eval-graph" if "--graph" in sys.argv else "eval-ask"):
+        result = evaluate(data=rows, predict_fn=predict_fn, scorers=[must_match, must_not_match, form_offered, strict_pass])
     m = result.metrics
     print(json.dumps(m, indent=2))
     passed = round(m.get("strict_pass/mean", 0) * len(rows))
