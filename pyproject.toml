@@ -1,0 +1,13 @@
+[project]
+name = "databricks-rag"
+version = "0.1.0"
+description = "The fruitlessresearch.com support corpus indexed on Databricks Vector Search, with a grounded Q&A and an MLflow evaluation, to compare with the Cloudflare build."
+requires-python = ">=3.11"
+dependencies = [
+  "databricks-sdk>=0.40",
+  "mlflow[databricks]>=3.0",
+  "openai>=1.50",
+]
+
+[tool.uv]
+package = false

@@ -1,0 +1,26 @@
+# Declarative Automation Bundle: the same pipeline the Makefile runs by hand, as a deployable job.
+#   databricks bundle validate --strict -t dev
+#   databricks bundle deploy -t dev
+#   databricks bundle run rag_index -t dev
+bundle:
+  name: fr-support-rag
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    default: workspace
+  schema:
+    default: rag
+  warehouse_id:
+    description: Serverless SQL warehouse for the table-building SQL task
+    lookup:
+      warehouse: "Serverless Starter Warehouse"
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      profile: free

@@ -1,0 +1,27 @@
+# One job, two tasks, all serverless: rebuild the source table from the corpus volume, then
+# (re)build and sync the Vector Search index. Upload (make upload) stays a local step: the corpus
+# comes from the sibling site repo's chunker, which only exists on the laptop.
+resources:
+  jobs:
+    rag_index:
+      name: fr-support-rag index
+      description: Rebuild workspace.rag.chunks from the corpus volume and sync the Vector Search index.
+      tags:
+        project: fr-support-rag
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            dependencies: ["databricks-sdk>=0.40"]
+      tasks:
+        - task_key: chunks_table
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/chunks.sql
+        - task_key: vector_index
+          depends_on:
+            - task_key: chunks_table
+          spark_python_task:
+            python_file: ../src/build_index.py
+          environment_key: default
