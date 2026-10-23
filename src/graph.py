@@ -21,6 +21,7 @@ gateway speaks the OpenAI chat-completions API; nothing in this file knows which
 Same system prompt, same limits, same empty-retrieval guard. evaluate.py --graph scores this path with the
 same 30 cases, so the two orchestrations are compared on the same questions.
 """
+import re
 import sys
 from pathlib import Path
 from typing import Literal, TypedDict
@@ -49,6 +50,9 @@ SYSTEM_TOOL = SYSTEM.replace(
 def show_form(form: Literal["resend-license", "resend-download", "complete-bundle"]) -> str:
     """Show the visitor one of the site's self-service forms below your answer. They enter their own email in it; you never see it."""
     return f"form {form} shown"
+
+
+DOWNLOAD = re.compile(r"\b(download|link|pack|library|drum|sounds?|impulse)\b", re.I)
 
 
 class State(TypedDict, total=False):
@@ -114,7 +118,12 @@ def tools_node(state: State) -> State:
     out, form = [], state.get("form")
     for call in last.tool_calls:
         want = call.get("args", {}).get("form")
-        if call.get("name") == "show_form" and want in FORMS and LICENSING.search(state["question"]) and form is None:
+        # The policy: a license or bundle form only on a licensing-shaped question (the FAQ-pin regex),
+        # a download form only on a download-shaped one. The first eval run caught the gate being too
+        # narrow: "I lost my download link for the drum pack" earned a correct resend-download call that
+        # the licensing-only gate threw away.
+        shaped = DOWNLOAD.search(state["question"]) if want == "resend-download" else LICENSING.search(state["question"])
+        if call.get("name") == "show_form" and want in FORMS and shaped and form is None:
             form = want
             result = f"The {want} form will be shown below your answer. Now write the answer text."
         else:

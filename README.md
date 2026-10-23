@@ -130,6 +130,42 @@ The Cloudflare build uses Cloudflare's AI Gateway for the same reasons (logs, co
 a managed service in front of the Anthropic key. The difference here is that the service, its limits and
 its log table are objects in the same catalog as the data, and the policy is a file in this repo.
 
+## The same assistant as a LangGraph graph
+
+`src/graph.py` is `ask.py` drawn as a **LangGraph state graph**, so the control flow is explicit and the
+one place the two builds differ in mechanism is made real: `show_form` is a bound tool the model calls, as
+in the Cloudflare build, rather than a tagged last line.
+
+```
+retrieve ──(no passages)──▶ refuse ──▶ END
+    └────(passages)───────▶ generate ──(tool call)──▶ tools ──▶ generate ──▶ END
+                                └──────(text)──────────────────────────────▶ END
+```
+
+The model is reached through the gateway with LangChain's OpenAI client (the gateway speaks the OpenAI
+chat-completions API, so nothing in the graph knows which model is behind it). Two things the loop does
+that a straight line cannot:
+
+- **The tools node is a policy gate, not a passthrough.** A `show_form` call is honoured only when the
+  question is shaped for it (a license or bundle form on a licensing-shaped question, a download form on a
+  download-shaped one); otherwise the tool result says "no form applies" and the model writes text. An
+  off-topic question cannot be answered with a license form however the model feels about it.
+- **Llama 3.3 70B, when it calls a tool, emits the call and no text.** The graph feeds the tool result back
+  and generates again, with no tools bound the second time so it writes instead of calling again.
+
+Scored with the same 30 cases (`uv run python src/evaluate.py --graph`):
+
+| Run | strict pass | note |
+|---|---|---|
+| graph, first run | 27/30 | the policy gate was licensing-only and threw away a correct `resend-download` call on "I lost my download link for the drum pack"; two second-pass answers lost the thread |
+| graph, gate widened | **29/30** | same score as the straight-line path and the Cloudflare build |
+
+The remaining miss is instructive: *"Where do the license files go on Windows?"* The model called
+`show_form` first, and in the second pass, with the tool result in front of it, wrote "the passages do not
+answer the question" when passage 2 held the `%APPDATA%` path. The straight-line path answers it. The
+tool-call loop costs this model some attention; the form it gains is worth it on the licensing questions
+and not on this one. The point of running both is to know that, with numbers.
+
 ## Not built
 
 - **A public front door.** On Free Edition, a Databricks App is reachable only by workspace users, so a

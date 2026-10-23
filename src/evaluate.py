@@ -46,8 +46,12 @@ def load_cases():
     return rows
 
 
+ANSWERS: dict[str, dict] = {}  # question -> what predict_fn returned, so misses can be printed without a trace query
+
+
 def predict_fn(question: str) -> dict:
     r = (ask_graph if "--graph" in sys.argv else ask)(question)
+    ANSWERS[question] = r
     return {"answer": r["answer"], "form": r["form"], "sources": [p["title"] for p in r["passages"]]}
 
 
@@ -87,6 +91,18 @@ def main() -> int:
     print(json.dumps(m, indent=2))
     passed = round(m.get("strict_pass/mean", 0) * len(rows))
     print(f"\n{passed}/{len(rows)} passed (strict)")
+    for row in rows:
+        q, exp = row["inputs"]["question"], row["expectations"]
+        r = ANSWERS.get(q)
+        if r is None:
+            continue
+        out = {"answer": r["answer"], "form": r["form"]}
+        problems = [f"missing /{p}/" for p in exp["must"] if not re.search(p, out["answer"], re.I)]
+        problems += [f"said /{p}/" for p in exp["must_not"] if re.search(p, out["answer"], re.I)]
+        if exp.get("form") and out["form"] != exp["form"]:
+            problems.append(f"form: wanted {exp['form']}, got {out['form']}")
+        if problems:
+            print(f"FAIL  {q}\n      {'; '.join(problems)}\n      form={out['form']} answer: {out['answer'][:300].replace(chr(10), ' ')}")
     return 0 if passed == len(rows) else 1
 
 
